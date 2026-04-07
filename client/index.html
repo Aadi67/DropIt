@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DropIt — transfer anything</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- LANDING SCREEN -->
+  <div id="screen-landing" class="screen active">
+    <div class="hero">
+      <div class="logo">⬇ dropit</div>
+      <p class="tagline">transfer anything, anywhere. no login. no install.</p>
+    </div>
+
+    <div class="card-grid">
+
+      <!-- Create Room -->
+      <div class="card">
+        <div class="card-label">create a room</div>
+        <div id="room-code-display" class="room-code">----</div>
+        <p class="card-hint">share this code with the other person</p>
+        <div class="btn-row">
+          <button id="btn-generate" class="btn btn-primary">generate code</button>
+          <button id="btn-copy-code" class="btn btn-ghost">copy</button>
+        </div>
+        <button id="btn-open-room" class="btn btn-success full-width">open room →</button>
+      </div>
+
+      <!-- Join Room -->
+      <div class="card">
+        <div class="card-label">join a room</div>
+        <input id="join-input" type="text" maxlength="4"
+               placeholder="enter code" class="code-input">
+        <p class="card-hint">enter the 4-character code</p>
+        <button id="btn-join" class="btn btn-success full-width">join room →</button>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ROOM SCREEN -->
+  <div id="screen-room" class="screen">
+
+    <div class="room-bar">
+      <div class="room-bar-left">
+        <span class="live-dot"></span>
+        <span>room</span>
+        <span id="active-code" class="active-code">----</span>
+      </div>
+      <div id="peer-status" class="peer-status waiting">waiting for peer...</div>
+      <button id="btn-leave" class="btn btn-ghost small">✕ leave</button>
+    </div>
+
+    <div id="conn-banner" class="conn-banner hidden">
+      ✓ peer connected — you can now transfer
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs">
+      <button class="tab active" data-tab="text">text</button>
+      <button class="tab" data-tab="files">files</button>
+      <button class="tab" data-tab="images">images</button>
+    </div>
+
+    <!-- Feed -->
+    <div id="feed" class="feed"></div>
+
+    <!-- Text Panel -->
+    <div id="panel-text" class="panel active">
+      <div class="send-row">
+        <textarea id="text-input"
+          placeholder="paste text, code, links..."></textarea>
+        <button id="btn-send-text" class="btn btn-primary">send →</button>
+      </div>
+    </div>
+
+    <!-- Files Panel -->
+    <div id="panel-files" class="panel">
+      <div id="file-drop" class="drop-zone">
+        <div class="drop-icon">📂</div>
+        <p>drag & drop files or <strong>click to browse</strong></p>
+        <p class="drop-hint">any format · up to 100MB</p>
+      </div>
+      <input id="file-input" type="file" multiple hidden>
+    </div>
+
+    <!-- Images Panel -->
+    <div id="panel-images" class="panel">
+      <div id="img-drop" class="drop-zone">
+        <div class="drop-icon">🖼</div>
+        <p>drag & drop images or <strong>click to browse</strong></p>
+        <p class="drop-hint">PNG, JPG, GIF · also paste Ctrl+V</p>
+      </div>
+      <input id="img-input" type="file" accept="image/*" multiple hidden>
+    </div>
+
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
