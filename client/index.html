@@ -21,12 +21,13 @@
       <div class="card">
         <div class="card-label">create a room</div>
         <div id="room-code-display" class="room-code">----</div>
-        <p class="card-hint">share this code with the other person</p>
-        <div class="btn-row">
-          <button id="btn-generate" class="btn btn-primary">generate code</button>
-          <button id="btn-copy-code" class="btn btn-ghost">copy</button>
-        </div>
-        <button id="btn-open-room" class="btn btn-success full-width">open room →</button>
+        <p class="card-hint" id="create-hint">click below to generate your room code</p>
+        <button id="btn-open-room" class="btn btn-success full-width">
+          open room →
+        </button>
+        <button id="btn-copy-code" class="btn btn-ghost full-width" style="display:none">
+          copy code
+        </button>
       </div>
 
       <!-- Join Room -->
@@ -49,13 +50,14 @@
         <span class="live-dot"></span>
         <span>room</span>
         <span id="active-code" class="active-code">----</span>
+        <button id="btn-copy-active" class="btn btn-ghost small">copy</button>
       </div>
       <div id="peer-status" class="peer-status waiting">waiting for peer...</div>
       <button id="btn-leave" class="btn btn-ghost small">✕ leave</button>
     </div>
 
     <div id="conn-banner" class="conn-banner hidden">
-      ✓ peer connected — you can now transfer
+      ✓ peer connected — both sides can now send and receive
     </div>
 
     <!-- Tabs -->
