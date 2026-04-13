@@ -1,4 +1,10 @@
-const socket = io()
+const BACKEND_URL = window.location.hostname === 'localhost'
+  ? 'http://localhost:3000'
+  : 'https://dropit-production-c17a.up.railway.app'
+
+const socket = io(BACKEND_URL, {
+  transports: ['websocket', 'polling']
+})
 
 let currentCode = null
 let connected   = false
