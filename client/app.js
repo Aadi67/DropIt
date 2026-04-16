@@ -209,9 +209,19 @@ $('file-drop').addEventListener('drop', (e) => {
   sendFiles(e.dataTransfer.files)
 })
 
+const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
+
 function sendFiles(files) {
   if (!connected) { showToast('no peer connected yet'); return }
-  Array.from(files).forEach(sendFile)
+  Array.from(files).forEach(file => {
+    if (file.size > MAX_FILE_SIZE) {
+      showToast(`${file.name} exceeds 100MB limit`)
+      addMsg('system', 'sys',
+        `⚠ ${escapeHtml(file.name)} (${formatSize(file.size)}) exceeds the 100MB limit. skipped.`)
+      return
+    }
+    sendFile(file)
+  })
 }
 
 function sendFile(file) {
