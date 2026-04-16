@@ -217,9 +217,59 @@ function sendFiles(files) {
 function sendFile(file) {
   const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
   let chunkIndex    = 0
+  let startTime     = Date.now()
   const reader      = new FileReader()
 
-  addMsg('sent', 'file', `sending: <strong>${file.name}</strong> (${formatSize(file.size)})`)
+  // Create the message with progress bar
+  const msgId   = `file-${Date.now()}-${file.name.replace(/\W/g,'')}`
+  const feedDiv = document.createElement('div')
+  feedDiv.className = 'msg sent'
+  feedDiv.id = msgId
+  feedDiv.innerHTML = `
+    <div class="msg-meta">
+      <span class="msg-tag tag-file">file</span>
+      <span class="msg-time">${new Date().toLocaleTimeString()}</span>
+    </div>
+    <div class="msg-content">
+      sending: <strong>${escapeHtml(file.name)}</strong> (${formatSize(file.size)})
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-info">
+        <span class="progress-pct">0%</span>
+        <span class="progress-chunks">0 / ${totalChunks} chunks</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="fill-${msgId}"></div>
+      </div>
+      <div class="progress-speed" id="speed-${msgId}">calculating...</div>
+    </div>
+  `
+  $('feed').appendChild(feedDiv)
+  $('feed').scrollTop = $('feed').scrollHeight
+
+  function updateSenderProgress() {
+    const pct      = Math.round((chunkIndex / totalChunks) * 100)
+    const elapsed  = (Date.now() - startTime) / 1000
+    const bytesSent = chunkIndex * CHUNK_SIZE
+    const speed    = elapsed > 0 ? bytesSent / elapsed : 0
+
+    const fill   = $(`fill-${msgId}`)
+    const pctEl  = feedDiv.querySelector('.progress-pct')
+    const chnkEl = feedDiv.querySelector('.progress-chunks')
+    const spdEl  = $(`speed-${msgId}`)
+
+    if (fill)   fill.style.width = pct + '%'
+    if (pctEl)  pctEl.textContent = pct + '%'
+    if (chnkEl) chnkEl.textContent = `${chunkIndex} / ${totalChunks} chunks`
+    if (spdEl)  spdEl.textContent = `${formatSize(speed)}/s`
+
+    // When done
+    if (chunkIndex === totalChunks) {
+      if (fill)  fill.classList.add('done')
+      if (pctEl) pctEl.textContent = '100%'
+      if (spdEl) spdEl.textContent = `✓ done in ${elapsed.toFixed(1)}s — avg ${formatSize(bytesSent / elapsed)}/s`
+    }
+  }
 
   function readNextChunk() {
     const start = chunkIndex * CHUNK_SIZE
@@ -237,31 +287,99 @@ function sendFile(file) {
       totalChunks
     })
     chunkIndex++
+    updateSenderProgress()
     if (chunkIndex < totalChunks) readNextChunk()
-    else addMsg('system', 'sys', `✓ ${file.name} fully sent`)
   }
 
   readNextChunk()
 }
 
-// Receive file chunks — works for BOTH directions
+// ── Receive file chunks with progress bar ──────────────────
 const incomingFiles = {}
 
 socket.on('receive-file-chunk', ({ chunk, filename, filesize, chunkIndex, totalChunks }) => {
+
+  // First chunk — create the message with progress bar
   if (!incomingFiles[filename]) {
-    incomingFiles[filename] = { chunks: [], received: 0, total: totalChunks }
-    addMsg('received', 'file', `receiving: <strong>${filename}</strong> (${formatSize(filesize)})`)
+    incomingFiles[filename] = {
+      chunks:    [],
+      received:  0,
+      total:     totalChunks,
+      startTime: Date.now(),
+      msgId:     `recv-${Date.now()}-${filename.replace(/\W/g,'')}`
+    }
+
+    const f       = incomingFiles[filename]
+    const feedDiv = document.createElement('div')
+    feedDiv.className = 'msg received'
+    feedDiv.id = f.msgId
+    feedDiv.innerHTML = `
+      <div class="msg-meta">
+        <span class="msg-tag tag-file">file</span>
+        <span class="msg-time">${new Date().toLocaleTimeString()}</span>
+      </div>
+      <div class="msg-content">
+        receiving: <strong>${escapeHtml(filename)}</strong> (${formatSize(filesize)})
+      </div>
+      <div class="progress-wrap">
+        <div class="progress-info">
+          <span class="progress-pct">0%</span>
+          <span class="progress-chunks">0 / ${totalChunks} chunks</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" id="fill-${f.msgId}"></div>
+        </div>
+        <div class="progress-speed" id="speed-${f.msgId}">waiting for data...</div>
+      </div>
+    `
+    $('feed').appendChild(feedDiv)
+    $('feed').scrollTop = $('feed').scrollHeight
   }
 
   const f = incomingFiles[filename]
   f.chunks[chunkIndex] = chunk
   f.received++
 
+  // Update receiver progress bar
+  const pct     = Math.round((f.received / f.total) * 100)
+  const elapsed = (Date.now() - f.startTime) / 1000
+  const bytesRx = f.received * CHUNK_SIZE
+  const speed   = elapsed > 0 ? bytesRx / elapsed : 0
+
+  const fill   = $(`fill-${f.msgId}`)
+  const feedDiv = $(f.msgId)
+  const pctEl  = feedDiv ? feedDiv.querySelector('.progress-pct')    : null
+  const chnkEl = feedDiv ? feedDiv.querySelector('.progress-chunks') : null
+  const spdEl  = $(`speed-${f.msgId}`)
+
+  if (fill)   fill.style.width = pct + '%'
+  if (pctEl)  pctEl.textContent = pct + '%'
+  if (chnkEl) chnkEl.textContent = `${f.received} / ${f.total} chunks`
+  if (spdEl)  spdEl.textContent = `${formatSize(speed)}/s`
+
+  // All chunks received — assemble and offer download
   if (f.received === f.total) {
     const blob = new Blob(f.chunks.map(c => new Uint8Array(c)))
     const url  = URL.createObjectURL(blob)
-    addMsg('received', 'sys',
-      `✓ ${filename} ready — <a href="${url}" download="${filename}" style="color:var(--accent2)">⬇ download</a>`)
+
+    if (fill)  fill.classList.add('done')
+    if (pctEl) pctEl.textContent = '100%'
+    if (spdEl) spdEl.textContent = `✓ done in ${elapsed.toFixed(1)}s — avg ${formatSize(bytesRx / elapsed)}/s`
+
+    // Append download link to the same message
+    if (feedDiv) {
+      const dl = document.createElement('div')
+      dl.style.marginTop = '8px'
+      dl.innerHTML = `
+        <a href="${url}" download="${filename}"
+          style="color:var(--accent2);font-size:12px">
+          ⬇ download ${escapeHtml(filename)}
+        </a>
+      `
+      feedDiv.appendChild(dl)
+      $('feed').scrollTop = $('feed').scrollHeight
+    }
+
     delete incomingFiles[filename]
   }
 })
