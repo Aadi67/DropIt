@@ -30,9 +30,11 @@ app.use(express.static(path.join(__dirname, '../client')))
 
 app.get('/health', (req, res) => {
   res.json({
-    status: 'ok',
-    time:   new Date().toISOString(),
-    bucket: process.env.S3_BUCKET_NAME || 'not configured'
+    status:  'ok',
+    time:    new Date().toISOString(),
+    bucket:  process.env.S3_BUCKET_NAME  || 'MISSING',
+    region:  process.env.AWS_REGION      || 'MISSING',
+    hasKey:  !!process.env.AWS_ACCESS_KEY_ID
   })
 })
 
