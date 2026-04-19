@@ -21,7 +21,7 @@ const io = new Server(server, {
     ],
     methods: ['GET', 'POST']
   },
-  maxHttpBufferSize: 1e6 // 1MB socket messages only — files go via S3 now
+  maxHttpBufferSize: 1e6 // 1MB socket messages only — files go via S3
 })
 
 const PORT = process.env.PORT || 3000
