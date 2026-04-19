@@ -52,9 +52,22 @@ function copyToClipboard(text) {
   showToast('code copied!')
 }
 
+function formatSize(bytes) {
+  if (bytes < 1024)    return bytes + ' B'
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'
+  return (bytes / 1048576).toFixed(1) + ' MB'
+}
+
+function escapeHtml(text) {
+  if (!text) return ''
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+}
+
 // ─── Landing — Create Room ───────────────────────────────────
 
-// User clicks Open Room → ask SERVER for a code
 $('btn-open-room').addEventListener('click', () => {
   $('btn-open-room').textContent = 'creating...'
   $('btn-open-room').disabled = true
@@ -62,19 +75,12 @@ $('btn-open-room').addEventListener('click', () => {
   isHost = true
 })
 
-// Server responds with confirmed code → show it
 socket.on('room-created', ({ code }) => {
   currentCode = code
-
-  // Show the real server-confirmed code
   $('room-code-display').textContent = code
   $('create-hint').textContent = 'share this code with the other person'
-
-  // Show copy button now that we have a real code
   $('btn-copy-code').style.display = 'block'
   $('btn-copy-code').addEventListener('click', () => copyToClipboard(code))
-
-  // Move to room screen
   enterRoom(code)
   addMsg('system', 'sys', `room <strong>${code}</strong> created. share this code and wait for peer.`)
 })
@@ -125,19 +131,10 @@ socket.on('peer-disconnected', () => {
 
 function enterRoom(code) {
   $('active-code').textContent = code
-
-  // Copy button in the room bar
   $('btn-copy-active').addEventListener('click', () => copyToClipboard(code))
-
   showScreen('room')
 
-  // If host — they're already in, peer hasn't joined yet
-  // If joiner — peer-connected fires on host side, room-joined fires here
-  // So we manually tell host that peer is now connected
   if (!isHost) {
-    // Joiner sees their own "connected" state immediately
-    // because server fires peer-connected to HOST, room-joined to PEER
-    // We trigger connected state for joiner after a tick
     setTimeout(() => {
       setPeerConnected()
       addMsg('system', 'sys', 'connected to peer. both sides can send and receive.')
@@ -167,7 +164,7 @@ document.querySelectorAll('.tab').forEach(tab => {
   })
 })
 
-// ─── Text transfer — BOTH directions ────────────────────────
+// ─── Text transfer ───────────────────────────────────────────
 
 $('btn-send-text').addEventListener('click', sendText)
 
@@ -180,8 +177,8 @@ $('text-input').addEventListener('keydown', (e) => {
 
 function sendText() {
   const text = $('text-input').value.trim()
-  if (!text)      { showToast('type something first'); return }
-  if (!connected) { showToast('no peer connected yet'); return }
+  if (!text)        { showToast('type something first'); return }
+  if (!connected)   { showToast('no peer connected yet'); return }
   if (!currentCode) { showToast('not in a room'); return }
 
   socket.emit('send-text', { code: currentCode, text })
@@ -189,218 +186,180 @@ function sendText() {
   $('text-input').value = ''
 }
 
-// Receive text — works for BOTH host and peer
 socket.on('receive-text', ({ text }) => {
   addMsg('received', 'peer', escapeHtml(text))
 })
 
-// ─── File transfer — BOTH directions ────────────────────────
+// ─── Progress bar helpers ────────────────────────────────────
 
-const CHUNK_SIZE = 64 * 1024
+function createProgressMsg(type, label, filename, filesize) {
+  const msgId = `${type}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  const div   = document.createElement('div')
+  div.className = `msg ${type === 'send' ? 'sent' : 'received'}`
+  div.id = msgId
+  div.innerHTML = `
+    <div class="msg-meta">
+      <span class="msg-tag tag-file">file</span>
+      <span class="msg-time">${new Date().toLocaleTimeString()}</span>
+    </div>
+    <div class="msg-content">
+      ${label}: <strong>${escapeHtml(filename)}</strong> (${formatSize(filesize)})
+    </div>
+    <div class="progress-wrap">
+      <div class="progress-info">
+        <span class="progress-pct">0%</span>
+        <span class="progress-status">preparing...</span>
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="fill-${msgId}"></div>
+      </div>
+      <div class="progress-speed" id="speed-${msgId}">–</div>
+    </div>
+    <div id="action-${msgId}"></div>
+  `
+  $('feed').appendChild(div)
+  $('feed').scrollTop = $('feed').scrollHeight
+  return msgId
+}
+
+function updateProgress(msgId, pct, status, speed) {
+  const fill  = $(`fill-${msgId}`)
+  const div   = $(msgId)
+  if (!div) return
+  const pctEl = div.querySelector('.progress-pct')
+  const stsEl = div.querySelector('.progress-status')
+  const spdEl = $(`speed-${msgId}`)
+  if (fill)   fill.style.width = pct + '%'
+  if (pctEl)  pctEl.textContent = pct + '%'
+  if (stsEl)  stsEl.textContent = status
+  if (spdEl)  spdEl.textContent = speed || ''
+  if (pct >= 100 && fill) fill.classList.add('done')
+}
+
+function addDownloadButton(msgId, url, filename) {
+  const el = $(`action-${msgId}`)
+  if (!el) return
+  el.innerHTML = `
+    <a href="${url}" target="_blank" download="${escapeHtml(filename)}"
+      style="color:var(--accent2);font-size:12px;margin-top:6px;display:inline-block">
+      ⬇ download ${escapeHtml(filename)}
+    </a>
+  `
+}
+
+// ─── File transfer — S3 direct upload ───────────────────────
+
+const MAX_FILE_SIZE = 5 * 1024 * 1024 * 1024 // 5GB
 
 $('file-drop').addEventListener('click', () => $('file-input').click())
 $('file-input').addEventListener('change', (e) => sendFiles(e.target.files))
 
-$('file-drop').addEventListener('dragover',  (e) => { e.preventDefault(); $('file-drop').classList.add('over') })
-$('file-drop').addEventListener('dragleave', ()  => $('file-drop').classList.remove('over'))
+$('file-drop').addEventListener('dragover', (e) => {
+  e.preventDefault()
+  $('file-drop').classList.add('over')
+})
+$('file-drop').addEventListener('dragleave', () => {
+  $('file-drop').classList.remove('over')
+})
 $('file-drop').addEventListener('drop', (e) => {
   e.preventDefault()
   $('file-drop').classList.remove('over')
   sendFiles(e.dataTransfer.files)
 })
 
-const MAX_FILE_SIZE = 100 * 1024 * 1024 // 100MB
-
 function sendFiles(files) {
   if (!connected) { showToast('no peer connected yet'); return }
   Array.from(files).forEach(file => {
     if (file.size > MAX_FILE_SIZE) {
-      showToast(`${file.name} exceeds 100MB limit`)
-      addMsg('system', 'sys',
-        `⚠ ${escapeHtml(file.name)} (${formatSize(file.size)}) exceeds the 100MB limit. skipped.`)
+      showToast(`${file.name} exceeds 5GB limit`)
       return
     }
-    sendFile(file)
+    sendFileViaS3(file)
   })
 }
 
-function sendFile(file) {
-  const totalChunks = Math.ceil(file.size / CHUNK_SIZE)
-  let chunkIndex    = 0
-  let startTime     = Date.now()
-  const reader      = new FileReader()
+function sendFileViaS3(file) {
+  const msgId = createProgressMsg('send', 'sending', file.name, file.size)
+  updateProgress(msgId, 0, 'requesting upload slot...', '')
 
-  // Create the message with progress bar
-  const msgId   = `file-${Date.now()}-${file.name.replace(/\W/g,'')}`
-  const feedDiv = document.createElement('div')
-  feedDiv.className = 'msg sent'
-  feedDiv.id = msgId
-  feedDiv.innerHTML = `
-    <div class="msg-meta">
-      <span class="msg-tag tag-file">file</span>
-      <span class="msg-time">${new Date().toLocaleTimeString()}</span>
-    </div>
-    <div class="msg-content">
-      sending: <strong>${escapeHtml(file.name)}</strong> (${formatSize(file.size)})
-    </div>
-    <div class="progress-wrap">
-      <div class="progress-info">
-        <span class="progress-pct">0%</span>
-        <span class="progress-chunks">0 / ${totalChunks} chunks</span>
-      </div>
-      <div class="progress-track">
-        <div class="progress-fill" id="fill-${msgId}"></div>
-      </div>
-      <div class="progress-speed" id="speed-${msgId}">calculating...</div>
-    </div>
-  `
-  $('feed').appendChild(feedDiv)
-  $('feed').scrollTop = $('feed').scrollHeight
+  socket.emit('request-upload-url', {
+    code:     currentCode,
+    filename: file.name,
+    filetype: file.type || 'application/octet-stream',
+    filesize: file.size
+  })
 
-  function updateSenderProgress() {
-    const pct      = Math.round((chunkIndex / totalChunks) * 100)
-    const elapsed  = (Date.now() - startTime) / 1000
-    const bytesSent = chunkIndex * CHUNK_SIZE
-    const speed    = elapsed > 0 ? bytesSent / elapsed : 0
+  socket.once('upload-url-ready', async ({ url, fields, key, filename }) => {
+    if (filename !== file.name) return
 
-    const fill   = $(`fill-${msgId}`)
-    const pctEl  = feedDiv.querySelector('.progress-pct')
-    const chnkEl = feedDiv.querySelector('.progress-chunks')
-    const spdEl  = $(`speed-${msgId}`)
+    try {
+      const startTime = Date.now()
+      const formData  = new FormData()
 
-    if (fill)   fill.style.width = pct + '%'
-    if (pctEl)  pctEl.textContent = pct + '%'
-    if (chnkEl) chnkEl.textContent = `${chunkIndex} / ${totalChunks} chunks`
-    if (spdEl)  spdEl.textContent = `${formatSize(speed)}/s`
+      Object.entries(fields).forEach(([k, v]) => formData.append(k, v))
+      formData.append('file', file)
 
-    // When done
-    if (chunkIndex === totalChunks) {
-      if (fill)  fill.classList.add('done')
-      if (pctEl) pctEl.textContent = '100%'
-      if (spdEl) spdEl.textContent = `✓ done in ${elapsed.toFixed(1)}s — avg ${formatSize(bytesSent / elapsed)}/s`
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+
+        xhr.upload.addEventListener('progress', (e) => {
+          if (!e.lengthComputable) return
+          const pct   = Math.round((e.loaded / e.total) * 100)
+          const elapsed = (Date.now() - startTime) / 1000
+          const speed = elapsed > 0 ? e.loaded / elapsed : 0
+          updateProgress(msgId, pct, `uploading to S3... ${pct}%`, `${formatSize(speed)}/s`)
+        })
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve()
+          else reject(new Error(`S3 upload failed: ${xhr.status}`))
+        })
+
+        xhr.addEventListener('error', () => reject(new Error('Upload failed')))
+
+        xhr.open('POST', url)
+        xhr.send(formData)
+      })
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      const speed   = formatSize(file.size / parseFloat(elapsed))
+      updateProgress(msgId, 100, '✓ uploaded', `done in ${elapsed}s — avg ${speed}/s`)
+
+      socket.emit('file-uploaded', {
+        code:     currentCode,
+        key,
+        filename: file.name,
+        filesize: file.size
+      })
+
+    } catch (err) {
+      updateProgress(msgId, 0, `✗ failed: ${err.message}`, '')
     }
-  }
-
-  function readNextChunk() {
-    const start = chunkIndex * CHUNK_SIZE
-    const blob  = file.slice(start, start + CHUNK_SIZE)
-    reader.readAsArrayBuffer(blob)
-  }
-
-  reader.onload = (e) => {
-    socket.emit('send-file-chunk', {
-      code: currentCode,
-      chunk: e.target.result,
-      filename: file.name,
-      filesize: file.size,
-      chunkIndex,
-      totalChunks
-    })
-    chunkIndex++
-    updateSenderProgress()
-    if (chunkIndex < totalChunks) readNextChunk()
-  }
-
-  readNextChunk()
+  })
 }
 
-// ── Receive file chunks with progress bar ──────────────────
-const incomingFiles = {}
-
-socket.on('receive-file-chunk', ({ chunk, filename, filesize, chunkIndex, totalChunks }) => {
-
-  // First chunk — create the message with progress bar
-  if (!incomingFiles[filename]) {
-    incomingFiles[filename] = {
-      chunks:    [],
-      received:  0,
-      total:     totalChunks,
-      startTime: Date.now(),
-      msgId:     `recv-${Date.now()}-${filename.replace(/\W/g,'')}`
-    }
-
-    const f       = incomingFiles[filename]
-    const feedDiv = document.createElement('div')
-    feedDiv.className = 'msg received'
-    feedDiv.id = f.msgId
-    feedDiv.innerHTML = `
-      <div class="msg-meta">
-        <span class="msg-tag tag-file">file</span>
-        <span class="msg-time">${new Date().toLocaleTimeString()}</span>
-      </div>
-      <div class="msg-content">
-        receiving: <strong>${escapeHtml(filename)}</strong> (${formatSize(filesize)})
-      </div>
-      <div class="progress-wrap">
-        <div class="progress-info">
-          <span class="progress-pct">0%</span>
-          <span class="progress-chunks">0 / ${totalChunks} chunks</span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" id="fill-${f.msgId}"></div>
-        </div>
-        <div class="progress-speed" id="speed-${f.msgId}">waiting for data...</div>
-      </div>
-    `
-    $('feed').appendChild(feedDiv)
-    $('feed').scrollTop = $('feed').scrollHeight
-  }
-
-  const f = incomingFiles[filename]
-  f.chunks[chunkIndex] = chunk
-  f.received++
-
-  // Update receiver progress bar
-  const pct     = Math.round((f.received / f.total) * 100)
-  const elapsed = (Date.now() - f.startTime) / 1000
-  const bytesRx = f.received * CHUNK_SIZE
-  const speed   = elapsed > 0 ? bytesRx / elapsed : 0
-
-  const fill   = $(`fill-${f.msgId}`)
-  const feedDiv = $(f.msgId)
-  const pctEl  = feedDiv ? feedDiv.querySelector('.progress-pct')    : null
-  const chnkEl = feedDiv ? feedDiv.querySelector('.progress-chunks') : null
-  const spdEl  = $(`speed-${f.msgId}`)
-
-  if (fill)   fill.style.width = pct + '%'
-  if (pctEl)  pctEl.textContent = pct + '%'
-  if (chnkEl) chnkEl.textContent = `${f.received} / ${f.total} chunks`
-  if (spdEl)  spdEl.textContent = `${formatSize(speed)}/s`
-
-  // All chunks received — assemble and offer download
-  if (f.received === f.total) {
-    const blob = new Blob(f.chunks.map(c => new Uint8Array(c)))
-    const url  = URL.createObjectURL(blob)
-
-    if (fill)  fill.classList.add('done')
-    if (pctEl) pctEl.textContent = '100%'
-    if (spdEl) spdEl.textContent = `✓ done in ${elapsed.toFixed(1)}s — avg ${formatSize(bytesRx / elapsed)}/s`
-
-    // Append download link to the same message
-    if (feedDiv) {
-      const dl = document.createElement('div')
-      dl.style.marginTop = '8px'
-      dl.innerHTML = `
-        <a href="${url}" download="${filename}"
-          style="color:var(--accent2);font-size:12px">
-          ⬇ download ${escapeHtml(filename)}
-        </a>
-      `
-      feedDiv.appendChild(dl)
-      $('feed').scrollTop = $('feed').scrollHeight
-    }
-
-    delete incomingFiles[filename]
-  }
+socket.on('file-sent-confirmed', ({ filename }) => {
+  console.log(`confirmed: ${filename} delivered to peer`)
 })
 
-// ─── Image transfer — BOTH directions ───────────────────────
+socket.on('file-ready', ({ downloadUrl, filename, filesize }) => {
+  const msgId = createProgressMsg('recv', 'received', filename, filesize)
+  updateProgress(msgId, 100, '✓ ready to download', '')
+  addDownloadButton(msgId, downloadUrl, filename)
+})
+
+// ─── Image transfer — S3 direct upload ──────────────────────
 
 $('img-drop').addEventListener('click', () => $('img-input').click())
 $('img-input').addEventListener('change', (e) => sendImages(e.target.files))
 
-$('img-drop').addEventListener('dragover',  (e) => { e.preventDefault(); $('img-drop').classList.add('over') })
-$('img-drop').addEventListener('dragleave', ()  => $('img-drop').classList.remove('over'))
+$('img-drop').addEventListener('dragover', (e) => {
+  e.preventDefault()
+  $('img-drop').classList.add('over')
+})
+$('img-drop').addEventListener('dragleave', () => {
+  $('img-drop').classList.remove('over')
+})
 $('img-drop').addEventListener('drop', (e) => {
   e.preventDefault()
   $('img-drop').classList.remove('over')
@@ -416,49 +375,83 @@ document.addEventListener('paste', (e) => {
 
 function sendImages(files) {
   if (!connected) { showToast('no peer connected yet'); return }
-  Array.from(files).forEach(sendImage)
+  Array.from(files).forEach(sendImageViaS3)
 }
 
-function sendImage(file) {
-  const reader = new FileReader()
-  reader.onload = (e) => {
-    socket.emit('send-image', {
-      code:      currentCode,
-      imageData: e.target.result,
-      filename:  file.name
-    })
-    addMsg('sent', 'img', `sent: ${file.name}`,
-      `<img src="${e.target.result}" class="msg-img" alt="${file.name}">
-       <div style="margin-top:6px">
-         <a href="${e.target.result}" download="${file.name}"
-           style="color:var(--accent2);font-size:12px">
-           ⬇ download ${file.name}
-         </a>
-       </div>`)
-  }
-  reader.readAsDataURL(file)
+function sendImageViaS3(file) {
+  const fname = file.name || 'image.png'
+  const msgId = createProgressMsg('send', 'sending image', fname, file.size)
+  updateProgress(msgId, 0, 'requesting upload slot...', '')
+
+  socket.emit('request-image-url', {
+    code:     currentCode,
+    filename: fname,
+    filetype: file.type || 'image/png',
+    filesize: file.size
+  })
+
+  socket.once('image-url-ready', async ({ url, fields, key }) => {
+    try {
+      const startTime = Date.now()
+      const formData  = new FormData()
+
+      Object.entries(fields).forEach(([k, v]) => formData.append(k, v))
+      formData.append('file', file)
+
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest()
+
+        xhr.upload.addEventListener('progress', (e) => {
+          if (!e.lengthComputable) return
+          const pct   = Math.round((e.loaded / e.total) * 100)
+          const speed = e.loaded / ((Date.now() - startTime) / 1000)
+          updateProgress(msgId, pct, `uploading... ${pct}%`, `${formatSize(speed)}/s`)
+        })
+
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve()
+          else reject(new Error(`Upload failed: ${xhr.status}`))
+        })
+
+        xhr.addEventListener('error', () => reject(new Error('Upload failed')))
+
+        xhr.open('POST', url)
+        xhr.send(formData)
+      })
+
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+      updateProgress(msgId, 100, '✓ uploaded', `done in ${elapsed}s`)
+
+      socket.emit('image-uploaded', {
+        code:     currentCode,
+        key,
+        filename: fname
+      })
+
+    } catch (err) {
+      updateProgress(msgId, 0, `✗ failed: ${err.message}`, '')
+    }
+  })
 }
 
-// Receive image — works for BOTH directions
-socket.on('receive-image', ({ imageData, filename }) => {
-  addMsg('received', 'img', `received: ${filename}`,
-    `<img src="${imageData}" class="msg-img" alt="${filename}">
-     <div style="margin-top:6px">
-       <a href="${imageData}" download="${filename}"
-         style="color:var(--accent2);font-size:12px">
-         ⬇ download ${filename}
-       </a>
-     </div>`)
+socket.on('image-ready', ({ downloadUrl, filename }) => {
+  const feed = $('feed')
+  const div  = document.createElement('div')
+  div.className = 'msg received'
+  div.innerHTML = `
+    <div class="msg-meta">
+      <span class="msg-tag tag-img">image</span>
+      <span class="msg-time">${new Date().toLocaleTimeString()}</span>
+    </div>
+    <div class="msg-content">received: ${escapeHtml(filename)}</div>
+    <img src="${downloadUrl}" class="msg-img" alt="${escapeHtml(filename)}">
+    <div style="margin-top:6px">
+      <a href="${downloadUrl}" download="${escapeHtml(filename)}"
+        style="color:var(--accent2);font-size:12px">
+        ⬇ download ${escapeHtml(filename)}
+      </a>
+    </div>
+  `
+  feed.appendChild(div)
+  feed.scrollTop = feed.scrollHeight
 })
-
-// ─── Helpers ─────────────────────────────────────────────────
-
-function formatSize(bytes) {
-  if (bytes < 1024)    return bytes + ' B'
-  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB'
-  return (bytes / 1048576).toFixed(1) + ' MB'
-}
-
-function escapeHtml(text) {
-  return text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
-}

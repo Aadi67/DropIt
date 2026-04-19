@@ -20,7 +20,8 @@ const io = new Server(server, {
       'https://allindrop.pages.dev'
     ],
     methods: ['GET', 'POST']
-  }
+  },
+  maxHttpBufferSize: 1e6 // 1MB socket messages only — files go via S3 now
 })
 
 const PORT = process.env.PORT || 3000
@@ -28,7 +29,11 @@ const PORT = process.env.PORT || 3000
 app.use(express.static(path.join(__dirname, '../client')))
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', time: new Date().toISOString() })
+  res.json({
+    status: 'ok',
+    time:   new Date().toISOString(),
+    bucket: process.env.S3_BUCKET_NAME || 'not configured'
+  })
 })
 
 io.on('connection', (socket) => {
